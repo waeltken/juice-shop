@@ -1,0 +1,64 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches:
+      - none
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# Requires Azure OIDC federation and repository secrets AZURE_CLIENT_ID,
+# AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, DEVRESOURCEGROUP, PRODRESOURCEGROUP,
+# LOCATION, and LABINSTANCEID. ARM-DevSecOps.json and ARM-DevSecOps-Prod.json
+# must exist at the repository root before running this workflow.
+jobs:
+  DeployDevInfrastructure_Stage_DeployInfrastructure:
+    name: Deploy Development Infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create Resource Groups
+        env:
+          DEVRESOURCEGROUP: ${{ secrets.DEVRESOURCEGROUP }}
+          PRODRESOURCEGROUP: ${{ secrets.PRODRESOURCEGROUP }}
+          LOCATION: ${{ secrets.LOCATION }}
+          LABINSTANCEID: ${{ secrets.LABINSTANCEID }}
+        run: |
+          az group create --name "$DEVRESOURCEGROUP" --location "$LOCATION" --tags "LabInstance=$LABINSTANCEID"
+          az group create --name "$PRODRESOURCEGROUP" --location "$LOCATION" --tags "LabInstance=$LABINSTANCEID"
+
+      - name: Deploy development infrastructure
+        env:
+          DEVRESOURCEGROUP: ${{ secrets.DEVRESOURCEGROUP }}
+        run: az deployment group create --resource-group "$DEVRESOURCEGROUP" --name deployinfradev --template-file ARM-DevSecOps.json
+
+  DeployProdInfrastructure_Stage_DeployInfrastructure:
+    name: Deploy Production Infrastructure
+    needs:
+      - DeployDevInfrastructure_Stage_DeployInfrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy production infrastructure
+        env:
+          PRODRESOURCEGROUP: ${{ secrets.PRODRESOURCEGROUP }}
+        run: az deployment group create --resource-group "$PRODRESOURCEGROUP" --name deployinfraprod --template-file ARM-DevSecOps-Prod.json

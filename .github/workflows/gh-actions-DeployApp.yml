@@ -1,0 +1,82 @@
+name: Juiceshop DevSecOps App Deployment
+
+on:
+  push:
+    branches:
+      - none
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+# Required repository secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID,
+# AZURE_SUBSCRIPTION_ID, LABINSTANCEID, DEVRESOURCEGROUP, PRODRESOURCEGROUP.
+# Configure Azure federated credentials for this repository's deployment branch
+# and grant the identity access to push to ACR and update both App Services.
+jobs:
+  Build_Stage_Build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to container registry
+        run: az acr login --name acrdevsecops${{ secrets.LABINSTANCEID }}
+
+      - name: Build container image
+        run: docker build . -t acrdevsecops${{ secrets.LABINSTANCEID }}.azurecr.io/devsecops:${{ github.run_id }}
+
+      - name: Push container image
+        run: docker push acrdevsecops${{ secrets.LABINSTANCEID }}.azurecr.io/devsecops:${{ github.run_id }}
+
+  Deploy_Dev_Stage_Deploy_to_Dev:
+    name: Deployment to development environment
+    runs-on: ubuntu-latest
+    needs:
+      - Build_Stage_Build
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure development container image
+        uses: azure/appservice-settings@v1
+        with:
+          app-name: juiceshop-dev-devsecops-${{ secrets.LABINSTANCEID }}
+          general-settings-json: '{"linuxFxVersion": "DOCKER|acrdevsecops${{ secrets.LABINSTANCEID }}.azurecr.io/devsecops:${{ github.run_id }}"}'
+
+      - name: Restart development app
+        run: az webapp restart --resource-group "${{ secrets.DEVRESOURCEGROUP }}" --name "juiceshop-dev-devsecops-${{ secrets.LABINSTANCEID }}"
+
+  Deploy_Prod_Stage_Deploy_to_Prod:
+    name: Deployment to production environment
+    runs-on: ubuntu-latest
+    needs:
+      - Deploy_Dev_Stage_Deploy_to_Dev
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure production container image
+        uses: azure/appservice-settings@v1
+        with:
+          app-name: juiceshop-prod-devsecops-${{ secrets.LABINSTANCEID }}
+          general-settings-json: '{"linuxFxVersion": "DOCKER|acrdevsecops${{ secrets.LABINSTANCEID }}.azurecr.io/devsecops:${{ github.run_id }}"}'
+
+      - name: Restart production app
+        run: az webapp restart --resource-group "${{ secrets.PRODRESOURCEGROUP }}" --name "juiceshop-prod-devsecops-${{ secrets.LABINSTANCEID }}"
